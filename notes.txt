@@ -1,0 +1,6 @@
+bubbled up 
+    piping system where bubbles travel based on rules
+
+split bubbles into smaller bubbles
+
+pot boiling over
