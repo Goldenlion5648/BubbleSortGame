@@ -1,5 +1,7 @@
+#+feature dynamic-literals
 package template
 //this should be able to be put into the web template with no changes!
+import "core:container/queue"
 import "core:fmt"
 import "core:log"
 import "core:math"
@@ -22,6 +24,11 @@ PipeType :: enum {
 	ACCEPTOR,
 }
 
+// PipeColors :: enum {
+// 	RED,
+
+// }
+
 Pipe :: struct {
 	using pos: ray.Vector3,
 	pipe_type: PipeType,
@@ -35,6 +42,9 @@ adj := [6]ray.Vector3 {
 	ray.Vector3{0, 0, -1},
 	ray.Vector3{0, -1, 0},
 }
+
+level_to_goal_positions: [dynamic][dynamic]ray.Vector3
+current_level := 0
 
 main :: proc() {
 	using ray
@@ -78,15 +88,39 @@ main :: proc() {
 		}
 	}
 	// defer delete(all_pipes)
+	MAX_LEVELS :: 8
+	MAX_GOALS :: 5
+
+	level_to_goal_positions = make([dynamic][dynamic]Vector3)
+	append(&level_to_goal_positions, [dynamic]Vector3{})
+	append_elems(
+		&level_to_goal_positions[0],
+		Vector3{center_coord, 4, center_coord},
+		Vector3{center_coord, 6, center_coord},
+	)
 	generator_pos: Vector3 = {center_coord, 1, center_coord}
-	goal_pos: Vector3 = {center_coord, 4, center_coord}
+	// all_goal_positions : [5]Vector3
+	// for i in 0..<len(all_goal_positions) {
+	// 	all_goal_positions[i] = NON_EXISTANT_POS
+	// }
+	goal_pos4: Vector3 = {center_coord, 4, center_coord}
 	append(&all_pipes, Pipe{pos = generator_pos, pipe_type = .GENERATOR})
-	append(&all_pipes, Pipe{pos = goal_pos, pipe_type = .ACCEPTOR})
+	for goal_pos in level_to_goal_positions[current_level] {
+		append(&all_pipes, Pipe{pos = goal_pos, pipe_type = .ACCEPTOR})
+	}
 	screen_center := Vector2{SCREEN_X_DIM / 2, SCREEN_Y_DIM / 2}
 	// defer free(&position_to_pipe)
+	pos_to_collected: map[Vector3]int
 	for should_run_game {
 		check_exit_keys()
-		UpdateCamera(&camera_3d, .FIRST_PERSON)
+		UpdateCamera(&camera_3d, .FREE)
+		if IsKeyDown(KeyboardKey.LEFT_SHIFT) {
+			up := GetCameraUp(&camera_3d)
+			move_speed := 5.4 * GetFrameTime()
+			up *= move_speed
+			camera_3d.position -= up
+			camera_3d.target -= up
+		}
 		position_to_pipe := make(map[Vector3]Pipe)
 		defer delete(position_to_pipe)
 		clear(&position_to_pipe)
@@ -140,9 +174,9 @@ main :: proc() {
 			if pipe.pipe_type != .NORMAL {
 				DrawCube(cube_pos, tile_dim, tile_dim, tile_dim, color_to_use)
 			}
-			DrawCubeWires(cube_pos, tile_dim, tile_dim, tile_dim, WHITE)
+			DrawCubeWires(cube_pos, tile_dim + .01, tile_dim + .01, tile_dim + .01, WHITE)
 		}
-		
+
 		if existing_pos_being_targeted != NON_EXISTANT_POS {
 			if IsMouseButtonPressed(MouseButton.LEFT) {
 				unordered_remove(&all_pipes, existing_pos_being_targeted_index)
@@ -159,11 +193,18 @@ main :: proc() {
 				PINK,
 			)
 		}
-		path_found := get_path(&all_pipes, generator_pos, goal_pos)
-		
+		path_found := get_path(&all_pipes, generator_pos, &level_to_goal_positions[current_level])
+		// TEMP:
+		is_flowing = true
 		// if IsKeyPressed(KeyboardKey.F) {
 		// 	fmt.println(path_found)
 		// }
+		if len(path_found) > 0 && is_flowing && remaining_to_send > 0 {
+			pos_to_collected[path_found[len(path_found) - 1]] += 1
+			remaining_to_send -= 1
+			fmt.println(pos_to_collected)
+		}
+
 		radius: f32 = .4
 		side_count: i32 = 8
 		/* if len(path_found) > 0 {
@@ -184,7 +225,7 @@ main :: proc() {
 						lower = connected_pos
 						higher = pos
 					}
-					to_add := (higher - lower) * radius / 1.8 
+					to_add := (higher - lower) * radius / 1.8
 					lower -= to_add
 					higher += to_add
 					DrawCylinderEx(lower, higher, radius, radius, side_count, WHITE)
@@ -197,7 +238,19 @@ main :: proc() {
 		EndMode3D()
 		font_size: f32 = 50
 		spacing: f32 = 0
-		measured := MeasureTextEx(default_font, "+", font_size, spacing)
+		DrawText(fmt.ctprint("Remaining:", remaining_to_send), 10, 10, 24, BLACK)
+		for goal_pos in level_to_goal_positions[current_level] {
+			cube_screen_pos := GetWorldToScreen(goal_pos, camera_3d)
+			DrawText(
+				fmt.ctprint(pos_to_collected[goal_pos]),
+				i32(cube_screen_pos.x),
+				i32(cube_screen_pos.y + tile_dim),
+				40,
+				BLACK,
+			)
+		}
+
+		// measured := MeasureTextEx(default_font, "+", font_size, spacing)
 		// DrawTextPro(default_font, "+", screen_center, measured / 2, 0, 50, 0, WHITE)
 		DrawCircle(i32(screen_center.x), i32(screen_center.y), 5, LIGHTGRAY)
 		EndDrawing()
@@ -208,12 +261,17 @@ main :: proc() {
 		free_all(context.temp_allocator)
 	}
 	delete(all_pipes)
+	delete(level_to_goal_positions)
 	shutdown()
 	free_all()
 	reset_tracking_allocator(&tracking_allocator)
 }
 
-get_path :: proc(all_pipes: ^[dynamic]Pipe, start, end: ray.Vector3) -> [dynamic]ray.Vector3 {
+get_path :: proc(
+	all_pipes: ^[dynamic]Pipe,
+	start: ray.Vector3,
+	goal_positions: ^[dynamic]ray.Vector3,
+) -> [dynamic]ray.Vector3 {
 	using ray
 
 	all_positions := make([dynamic]Vector3, context.temp_allocator)
@@ -239,7 +297,7 @@ get_path :: proc(all_pipes: ^[dynamic]Pipe, start, end: ray.Vector3) -> [dynamic
 	// append_elem(&fringe, start)
 	cur_path_copy: [dynamic]Vector3
 	fringe_top: for len(fringe) > 0 {
-		cur_path := pop(&fringe)
+		cur_path := pop_front(&fringe)
 		defer delete(cur_path)
 		cur := cur_path[len(cur_path) - 1]
 		if !slice.contains(all_positions[:], cur) || slice.contains(seen[:], cur) {
@@ -252,8 +310,11 @@ get_path :: proc(all_pipes: ^[dynamic]Pipe, start, end: ray.Vector3) -> [dynamic
 		}
 
 		append_elem(&seen, cur)
-		if cur == end {
+		if slice.contains(goal_positions[:], cur) {
 			return cur_path
+		}
+		if slice.contains(level_to_goal_positions[current_level][:], cur) {
+			continue
 		}
 		get_score :: proc(point: ray.Vector3) -> int {
 			score := 0
