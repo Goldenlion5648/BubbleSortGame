@@ -17,7 +17,9 @@ camera_3d: ray.Camera3D
 
 PipeType :: enum {
 	NORMAL = 0,
-	DEAD   = 1,
+	DEAD,
+	GENERATOR,
+	ACCEPTOR,
 }
 
 Pipe :: struct {
@@ -45,6 +47,7 @@ main :: proc() {
 	InitWindow(i32(SCREEN_X_DIM), i32(SCREEN_Y_DIM), "First Odin Game2")
 
 	tile_dim: f32 = 1
+	NON_EXISTANT_POS :: ray.Vector3{1000, 1000, 1000}
 	ray.SetTargetFPS(60)
 	InitAudioDevice()
 	default_font := ray.GetFontDefault()
@@ -52,11 +55,12 @@ main :: proc() {
 	board_dim: f32 = 5
 
 	all_pipes := make([dynamic]Pipe)
-	tile_dim_halfs := Vector3{tile_dim / 2, tile_dim / 2, tile_dim / 2}
-	defer free(&all_pipes)
-	for x := -board_dim / 2; x < board_dim; x += tile_dim {
-		for z := -board_dim / 2; z < board_dim; z += tile_dim {
-			cube_pos := Vector3{f32(x), 1, f32(z)}
+	tile_dims_vector := Vector3{tile_dim, tile_dim, tile_dim}
+	tile_dim_halfs := tile_dims_vector / 2
+	// defer free(&all_pipes)
+	for x := -board_dim / 2; x <= board_dim; x += tile_dim {
+		for z := -board_dim / 2; z <= board_dim; z += tile_dim {
+			cube_pos := Vector3{f32(x), 0, f32(z)}
 			append(&all_pipes, Pipe{cube_pos, .DEAD})
 		}
 	}
@@ -73,7 +77,7 @@ main :: proc() {
 		DrawGrid(10, tile_dim)
 		// for y in 0..<board_dim {
 		// for x := -board_dim/2; x < board_dim; x := tile_dim
-		targeted_spot: Vector3
+		pos_to_place_at: Vector3
 		camera_ray := GetScreenToWorldRay(screen_center, camera_3d)
 		slice.sort_by(all_pipes[:], proc(a, b: Pipe) -> bool {
 			return(
@@ -82,52 +86,48 @@ main :: proc() {
 			)
 		})
 		has_hit := false
-		for &pipe in all_pipes {
+		existing_pos_being_targeted: Vector3 = NON_EXISTANT_POS
+		existing_pos_being_targeted_index: int
+		for &pipe, index in all_pipes {
 			cube_pos := pipe.pos
 			result_ray_collision := GetRayCollisionBox(
 				camera_ray,
 				BoundingBox{cube_pos - tile_dim_halfs, cube_pos + tile_dim_halfs},
 			)
-			color_to_use := DARKGRAY
+			color_to_use := DARKGRAY if pipe.pipe_type == .DEAD else GREEN
 			if !has_hit && result_ray_collision.hit {
-				// color_to_use = RED
-				targeted_spot = result_ray_collision.point + result_ray_collision.normal
-				targeted_spot.x = f32(i32(targeted_spot.x / tile_dim)) * tile_dim + (tile_dim / 2)
-				targeted_spot.y = f32(i32(targeted_spot.y / tile_dim)) * tile_dim
-				targeted_spot.z = f32(i32(targeted_spot.z / tile_dim)) * tile_dim + (tile_dim / 2)
+				pos_to_place_at = cube_pos + (result_ray_collision.normal * tile_dim)
 				has_hit = true
+				existing_pos_being_targeted_index = index
+				existing_pos_being_targeted = cube_pos
 			}
-			DrawCube(cube_pos - {0, 0.01, 0}, tile_dim, tile_dim, tile_dim, color_to_use)
+			DrawCube(cube_pos, tile_dim, tile_dim, tile_dim, color_to_use)
 			DrawCubeWires(cube_pos, tile_dim, tile_dim, tile_dim, WHITE)
 		}
-		DrawCubeWires(targeted_spot, tile_dim, tile_dim, tile_dim, PINK)
-		// for x := -board_dim / 2; x < board_dim; x += tile_dim {
-		// 	for z := -board_dim / 2; z < board_dim; z += tile_dim {
-		// 		// GenMeshCube()
-
-		// 		result_ray_collision := GetRayCollisionBox(
-		// 			camera_ray,
-		// 			BoundingBox{cube_pos - tile_dim_halfs, cube_pos + tile_dim_halfs},
-		// 		)
-		// 		color_to_use := DARKGRAY
-		// 		if result_ray_collision.hit {
-		// 			color_to_use = RED
-		// 			targeted_spot = result_ray_collision.point
-		// 		}
-		// 		DrawCube(cube_pos, tile_dim, tile_dim, tile_dim, color_to_use)
-		// 		DrawCubeWires(cube_pos, tile_dim, tile_dim, tile_dim, WHITE)
-		// 	}
-		// }
-		// }
-		// DrawSphere(result_ray.position + result_ray.direction, .2, PINK)
-		// fmt.println(result_ray.direction)
+		if existing_pos_being_targeted != NON_EXISTANT_POS {
+			if IsMouseButtonPressed(MouseButton.LEFT) {
+				unordered_remove(&all_pipes, existing_pos_being_targeted_index)
+			}
+			if IsMouseButtonPressed(MouseButton.RIGHT) {
+				append(&all_pipes, Pipe{pos = pos_to_place_at, pipe_type = .NORMAL})
+			}
+			buffer: f32 = 0.03
+			DrawCubeWires(
+				existing_pos_being_targeted + {0, 0.01, 0},
+				tile_dim + buffer,
+				tile_dim + buffer,
+				tile_dim + buffer,
+				PINK,
+			)
+		}
 
 
 		EndMode3D()
 		font_size: f32 = 50
 		spacing: f32 = 0
 		measured := MeasureTextEx(default_font, "+", font_size, spacing)
-		DrawTextPro(default_font, "+", screen_center, measured / 2, 0, 50, 0, WHITE)
+		// DrawTextPro(default_font, "+", screen_center, measured / 2, 0, 50, 0, WHITE)
+		DrawCircle(i32(screen_center.x), i32(screen_center.y), 5, LIGHTGRAY)
 		EndDrawing()
 		game_clock += 1
 		free_all(context.temp_allocator)
