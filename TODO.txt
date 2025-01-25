@@ -3,3 +3,5 @@ draw cross hair
 when nothing targeted, don't look at 0 0 0 
 
 break and place with modulo (don't require pressing for each one)
+
+disallow destroying generator or acceptor

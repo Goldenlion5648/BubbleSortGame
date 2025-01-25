@@ -27,6 +27,15 @@ Pipe :: struct {
 	pipe_type: PipeType,
 }
 
+adj := [6]ray.Vector3 {
+	ray.Vector3{0, 1, 0},
+	ray.Vector3{1, 0, 0},
+	ray.Vector3{-1, 0, 0},
+	ray.Vector3{0, 0, 1},
+	ray.Vector3{0, 0, -1},
+	ray.Vector3{0, -1, 0},
+}
+
 main :: proc() {
 	using ray
 	game_clock := 0
@@ -35,13 +44,6 @@ main :: proc() {
 	tracking_allocator: mem.Tracking_Allocator
 	mem.tracking_allocator_init(&tracking_allocator, default_allocator)
 	context.allocator = mem.tracking_allocator(&tracking_allocator)
-	camera_3d = {
-		fovy       = 45,
-		position   = {5, 5, 5},
-		projection = .PERSPECTIVE,
-		target     = {0, 2, 0},
-		up         = {0, 1, 0},
-	}
 
 	SetConfigFlags({.VSYNC_HINT})
 	InitWindow(i32(SCREEN_X_DIM), i32(SCREEN_Y_DIM), "First Odin Game2")
@@ -52,31 +54,51 @@ main :: proc() {
 	InitAudioDevice()
 	default_font := ray.GetFontDefault()
 	DisableCursor()
-	board_dim: f32 = 5
+	board_dim: f32 = 7
+	is_flowing := false
+	remaining_to_send := 1000
+	center_coord := f32(int(board_dim / 2))
+	camera_3d = {
+		fovy       = 45,
+		position   = {board_dim, 5, board_dim},
+		projection = .PERSPECTIVE,
+		target     = {center_coord, 2, center_coord},
+		up         = {0, 1, 0},
+	}
 
-	all_pipes := make([dynamic]Pipe)
+	all_pipes := make([dynamic]Pipe, context.allocator)
+	// defer delete(all_pipes)
 	tile_dims_vector := Vector3{tile_dim, tile_dim, tile_dim}
 	tile_dim_halfs := tile_dims_vector / 2
 	// defer free(&all_pipes)
-	for x := -board_dim / 2; x <= board_dim; x += tile_dim {
-		for z := -board_dim / 2; z <= board_dim; z += tile_dim {
+	for x: f32 = 0; x < board_dim; x += tile_dim {
+		for z: f32 = 0; z < board_dim; z += tile_dim {
 			cube_pos := Vector3{f32(x), 0, f32(z)}
 			append(&all_pipes, Pipe{cube_pos, .DEAD})
 		}
 	}
+	// defer delete(all_pipes)
+	generator_pos: Vector3 = {center_coord, 1, center_coord}
+	goal_pos: Vector3 = {center_coord, 4, center_coord}
+	append(&all_pipes, Pipe{pos = generator_pos, pipe_type = .GENERATOR})
+	append(&all_pipes, Pipe{pos = goal_pos, pipe_type = .ACCEPTOR})
 	screen_center := Vector2{SCREEN_X_DIM / 2, SCREEN_Y_DIM / 2}
-
+	// defer free(&position_to_pipe)
 	for should_run_game {
 		check_exit_keys()
 		UpdateCamera(&camera_3d, .FIRST_PERSON)
+		position_to_pipe := make(map[Vector3]Pipe)
+		defer delete(position_to_pipe)
+		clear(&position_to_pipe)
+		for pipe in all_pipes {
+			position_to_pipe[pipe.pos] = pipe
+		}
 		//update
 		//drawing
 		BeginDrawing()
 		ClearBackground(SKYBLUE)
 		BeginMode3D(camera_3d)
-		DrawGrid(10, tile_dim)
-		// for y in 0..<board_dim {
-		// for x := -board_dim/2; x < board_dim; x := tile_dim
+
 		pos_to_place_at: Vector3
 		camera_ray := GetScreenToWorldRay(screen_center, camera_3d)
 		slice.sort_by(all_pipes[:], proc(a, b: Pipe) -> bool {
@@ -94,16 +116,33 @@ main :: proc() {
 				camera_ray,
 				BoundingBox{cube_pos - tile_dim_halfs, cube_pos + tile_dim_halfs},
 			)
-			color_to_use := DARKGRAY if pipe.pipe_type == .DEAD else GREEN
+			color_to_use: Color
+			switch pipe.pipe_type {
+			case .DEAD:
+				color_to_use = DARKGRAY
+			case .GENERATOR:
+				color_to_use = GREEN
+			case .NORMAL:
+				color_to_use = BROWN
+			case .ACCEPTOR:
+				color_to_use = RED
+			}
+			if color_to_use != DARKGRAY {
+				// color_to_use.a = 20
+			}
+
 			if !has_hit && result_ray_collision.hit {
 				pos_to_place_at = cube_pos + (result_ray_collision.normal * tile_dim)
 				has_hit = true
 				existing_pos_being_targeted_index = index
 				existing_pos_being_targeted = cube_pos
 			}
-			DrawCube(cube_pos, tile_dim, tile_dim, tile_dim, color_to_use)
+			if pipe.pipe_type != .NORMAL {
+				DrawCube(cube_pos, tile_dim, tile_dim, tile_dim, color_to_use)
+			}
 			DrawCubeWires(cube_pos, tile_dim, tile_dim, tile_dim, WHITE)
 		}
+		
 		if existing_pos_being_targeted != NON_EXISTANT_POS {
 			if IsMouseButtonPressed(MouseButton.LEFT) {
 				unordered_remove(&all_pipes, existing_pos_being_targeted_index)
@@ -120,6 +159,39 @@ main :: proc() {
 				PINK,
 			)
 		}
+		path_found := get_path(&all_pipes, generator_pos, goal_pos)
+		
+		// if IsKeyPressed(KeyboardKey.F) {
+		// 	fmt.println(path_found)
+		// }
+		radius: f32 = .4
+		side_count: i32 = 8
+		/* if len(path_found) > 0 {
+			for point, i in path_found[:len(path_found) - 1] {
+				DrawCylinderEx(path_found[i], path_found[i + 1], radius, radius, side_count, WHITE)
+				DrawCylinderWiresEx(path_found[i], path_found[i + 1], radius, radius, side_count, BLACK)
+			}
+		} */
+		for pos in position_to_pipe {
+			for offset in adj {
+				connected_pos := pos + offset
+				if connected_pos in position_to_pipe {
+					lower := pos
+					higher := connected_pos
+					if pos.x > connected_pos.x ||
+					   pos.y > connected_pos.y ||
+					   pos.z > connected_pos.z {
+						lower = connected_pos
+						higher = pos
+					}
+					to_add := (higher - lower) * radius / 1.8 
+					lower -= to_add
+					higher += to_add
+					DrawCylinderEx(lower, higher, radius, radius, side_count, WHITE)
+					DrawCylinderWiresEx(lower, higher, radius, radius, side_count, BLACK)
+				}
+			}
+		}
 
 
 		EndMode3D()
@@ -130,19 +202,91 @@ main :: proc() {
 		DrawCircle(i32(screen_center.x), i32(screen_center.y), 5, LIGHTGRAY)
 		EndDrawing()
 		game_clock += 1
+		// if len(path_found) > 0 {
+		// 	free(&path_found)
+		// }
 		free_all(context.temp_allocator)
 	}
+	delete(all_pipes)
 	shutdown()
 	free_all()
 	reset_tracking_allocator(&tracking_allocator)
+}
+
+get_path :: proc(all_pipes: ^[dynamic]Pipe, start, end: ray.Vector3) -> [dynamic]ray.Vector3 {
+	using ray
+
+	all_positions := make([dynamic]Vector3, context.temp_allocator)
+	for &pipe in all_pipes {
+		append_elem(&all_positions, pipe.pos)
+	}
+	fringe := make([dynamic][dynamic]Vector3)
+	append_elem(&fringe, [dynamic]Vector3{})
+	append_elem(&fringe[len(fringe) - 1], start)
+
+	defer {
+		for &x in fringe {
+			delete(x)
+		}
+		delete(fringe)
+	}
+	seen := make([dynamic]Vector3, context.temp_allocator)
+	// defer free(&seen)
+
+	bad_ret := make([dynamic]Vector3)
+	// defer free(&seen)
+
+	// append_elem(&fringe, start)
+	cur_path_copy: [dynamic]Vector3
+	fringe_top: for len(fringe) > 0 {
+		cur_path := pop(&fringe)
+		defer delete(cur_path)
+		cur := cur_path[len(cur_path) - 1]
+		if !slice.contains(all_positions[:], cur) || slice.contains(seen[:], cur) {
+			continue
+		}
+		for &pipe in all_pipes {
+			if pipe.pos == cur && pipe.pipe_type == .DEAD {
+				continue fringe_top
+			}
+		}
+
+		append_elem(&seen, cur)
+		if cur == end {
+			return cur_path
+		}
+		get_score :: proc(point: ray.Vector3) -> int {
+			score := 0
+			if point == {0, 1, 0} {
+				score -= 1000
+			}
+			if point == {0, -1, 0} {
+				score += 100_000
+			}
+			return score + int(rand.float32_range(0, 4))
+		}
+		slice.sort_by(adj[:], proc(a, b: Vector3) -> bool {
+			return get_score(a) < get_score(b)
+		})
+
+		for option in adj {
+			append_elem(&fringe, [dynamic]Vector3{})
+			fringe[len(fringe) - 1] = make([dynamic]Vector3, context.temp_allocator)
+			for elem in cur_path {
+				append_elem(&fringe[len(fringe) - 1], elem)
+			}
+			append_elem(&fringe[len(fringe) - 1], cur + option)
+		}
+
+	}
+	return bad_ret
 }
 
 check_exit_keys :: proc() {
 	using ray
 	if WindowShouldClose() ||
 	   (IsKeyDown(KeyboardKey.LEFT_CONTROL) && IsKeyPressed(KeyboardKey.B)) ||
-	   IsKeyDown(KeyboardKey.F8) ||
-	   IsKeyDown(KeyboardKey.LEFT_ALT) {
+	   IsKeyDown(KeyboardKey.F8) {
 		should_run_game = false
 	}
 }
