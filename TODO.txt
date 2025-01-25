@@ -1,10 +1,11 @@
-draw cross hair
+#DONE draw cross hair
 
-when nothing targeted, don't look at 0 0 0 
+#DONE when nothing targeted, don't look at 0 0 0 
 
-break and place with modulo (don't require pressing for each one)
+#DONE break and place with modulo (don't require pressing for each one)
 
-disallow destroying generator or acceptor
+#DONE disallow destroying generator or acceptor
 
-reset distributed power
-reset pipes placed
+#DONE reset distributed power
+#DONE reset pipes placed
+

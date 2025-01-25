@@ -51,13 +51,15 @@ last_break_time: f64 = -1000
 tile_dim: f32 : 1
 place_delay :: .25
 board_dim: f32
-is_flowing := false
-remaining_to_send := 1000
+remaining_to_send :int 
+DEFAULT_REMAINING_TO_SEND :: 1000
 center_coord: f32
-generator_pos: ray.Vector3 = {center_coord, 1, center_coord}
+generator_pos: ray.Vector3
 pos_to_collected: map[ray.Vector3]int
 game_clock := 0
 tracking_allocator: mem.Tracking_Allocator
+ACCEPTOR_CAP :: 100
+is_cheat_mode := false
 
 init :: proc() {
 	using ray
@@ -68,7 +70,8 @@ init :: proc() {
 
 	SetConfigFlags({.VSYNC_HINT})
 	InitWindow(i32(SCREEN_X_DIM), i32(SCREEN_Y_DIM), "First Odin Game2")
-
+	is_cheat_mode = ODIN_OS == .Windows
+	// fmt.println(is_cheat_mode)
 
 	tile_dims_vector = Vector3{tile_dim, tile_dim, tile_dim}
 	tile_dim_halfs = tile_dims_vector / 2
@@ -78,7 +81,8 @@ init :: proc() {
 	default_font := ray.GetFontDefault()
 	DisableCursor()
 	board_dim = 7
-	center_coord := f32(int(board_dim / 2))
+	center_coord = f32(int(board_dim / 2))
+	generator_pos = {center_coord, 1, center_coord}
 
 	camera_3d = {
 		fovy       = 45,
@@ -92,16 +96,11 @@ init :: proc() {
 	// defer delete(all_pipes)
 
 	// defer free(&all_pipes)
-	for x: f32 = 0; x < board_dim; x += tile_dim {
-		for z: f32 = 0; z < board_dim; z += tile_dim {
-			cube_pos := Vector3{f32(x), 0, f32(z)}
-			append(&all_pipes, Pipe{cube_pos, .DEAD})
-		}
-	}
+	// reset_pipes()
 	// defer delete(all_pipes)
 	MAX_LEVELS :: 8
 	MAX_GOALS :: 5
-	current_level = 2
+	current_level = 0
 
 	level_to_goal_positions = make([dynamic][dynamic]Vector3)
 	append(&level_to_goal_positions, [dynamic]Vector3{})
@@ -122,28 +121,69 @@ init :: proc() {
 		&level_to_goal_positions[len(level_to_goal_positions) - 1],
 		Vector3{center_coord - 1, 4, center_coord},
 		Vector3{center_coord + 1, 4, center_coord},
-		Vector3{center_coord, 4, center_coord + 1},
+		Vector3{center_coord, 4, center_coord - 1},
 		Vector3{center_coord, 5, center_coord},
 	)
 
+	reset_pipes()
+	reset_remaining_bubbles()
+}
+
+reset_pipes :: proc() {
+	using ray
+	clear(&all_pipes)
+	clear(&pos_to_collected)
+	// floor
+	for x: f32 = 0; x < board_dim; x += tile_dim {
+		for z: f32 = 0; z < board_dim; z += tile_dim {
+			cube_pos := Vector3{f32(x), 0, f32(z)}
+			append(&all_pipes, Pipe{cube_pos, .DEAD})
+		}
+	}
 	generator_pos = {center_coord, 1, center_coord}
-	// all_goal_positions : [5]Vector3
-	// for i in 0..<len(all_goal_positions) {
-	// 	all_goal_positions[i] = NON_EXISTANT_POS
-	// }
-	goal_pos4: Vector3 = {center_coord, 4, center_coord}
 	append(&all_pipes, Pipe{pos = generator_pos, pipe_type = .GENERATOR})
 	for goal_pos in level_to_goal_positions[current_level] {
 		append(&all_pipes, Pipe{pos = goal_pos, pipe_type = .ACCEPTOR})
 	}
+}
 
+reset_remaining_bubbles :: proc() {
+	remaining_to_send = DEFAULT_REMAINING_TO_SEND
+}	
+
+advance_level :: proc() {
+	current_level += 1
+	setup_for_level()
+}
+
+setup_for_level :: proc() {
+	reset_pipes()
+	reset_remaining_bubbles()
 
 }
+
 
 update :: proc() {
 	using ray
 	check_exit_keys()
 	UpdateCamera(&camera_3d, .FREE)
+	if is_cheat_mode {
+		if IsKeyPressed(.BACKSPACE) && current_level > 0 {
+			current_level -= 1
+			setup_for_level()
+		}
+		if IsKeyPressed(.BACKSLASH) && current_level + 1 < len(level_to_goal_positions) {
+			current_level += 1
+			setup_for_level()
+		}
+	}
+
+	if IsKeyPressed(.R) {
+		reset_pipes()
+		reset_remaining_bubbles()
+	}
+
+
 	if IsKeyDown(KeyboardKey.LEFT_SHIFT) {
 		up := GetCameraUp(&camera_3d)
 		move_speed := 5.4 * GetFrameTime()
@@ -241,26 +281,31 @@ update :: proc() {
 		)
 	}
 	path_found := get_path(&all_pipes, generator_pos, &level_to_goal_positions[current_level])
-	// TEMP:
-	is_flowing = true
 	// if IsKeyPressed(KeyboardKey.F) {
 	// 	fmt.println(path_found)
 	// }
 	amount_per_round := 5
-	if len(path_found) > 0 && is_flowing && remaining_to_send > 0 {
-		pos_to_collected[path_found[len(path_found) - 1]] += amount_per_round
+	if len(path_found) > 0 && remaining_to_send > 0 {
+		if pos_to_collected[path_found[len(path_found) - 1]] + amount_per_round <= ACCEPTOR_CAP {
+			pos_to_collected[path_found[len(path_found) - 1]] += amount_per_round
+		}
 		remaining_to_send -= amount_per_round
-		fmt.println(pos_to_collected)
+	}
+
+	satisfied_collector_count := 0
+	for pos, amount in pos_to_collected {
+		if amount == ACCEPTOR_CAP {
+			satisfied_collector_count += 1
+		}
+	}
+	if satisfied_collector_count == len(level_to_goal_positions[current_level]) {
+		// TODO: add some delay
+		advance_level()
 	}
 
 	radius: f32 = .4
 	side_count: i32 = 8
-	/* if len(path_found) > 0 {
-			for point, i in path_found[:len(path_found) - 1] {
-				DrawCylinderEx(path_found[i], path_found[i + 1], radius, radius, side_count, WHITE)
-				DrawCylinderWiresEx(path_found[i], path_found[i + 1], radius, radius, side_count, BLACK)
-			}
-		} */
+	
 	for pos in position_to_pipe {
 		found := false
 		for offset in adj {
@@ -293,6 +338,7 @@ update :: proc() {
 	font_size: f32 = 50
 	spacing: f32 = 0
 	DrawText(fmt.ctprint("Remaining:", remaining_to_send), 10, 10, 24, BLACK)
+	DrawText(fmt.ctprint("Level:", current_level), 10, 60, 24, BLACK)
 	for goal_pos in level_to_goal_positions[current_level] {
 		cube_screen_pos := GetWorldToScreen(goal_pos, camera_3d)
 		DrawText(
@@ -314,7 +360,6 @@ update :: proc() {
 	// }
 	free_all(context.temp_allocator)
 }
-
 
 
 get_path :: proc(
@@ -393,7 +438,8 @@ get_path :: proc(
 
 check_exit_keys :: proc() {
 	using ray
-	if !should_run() || (IsKeyDown(KeyboardKey.LEFT_CONTROL) && IsKeyPressed(KeyboardKey.B)) ||
+	if !should_run() ||
+	   (IsKeyDown(KeyboardKey.LEFT_CONTROL) && IsKeyPressed(KeyboardKey.B)) ||
 	   IsKeyDown(KeyboardKey.F8) {
 		should_run_game = false
 	}
@@ -440,6 +486,9 @@ main :: proc() {
 		update()
 	}
 	delete(all_pipes)
+	for x in level_to_goal_positions {
+		delete(x)
+	}
 	delete(level_to_goal_positions)
 	shutdown()
 	free_all()
