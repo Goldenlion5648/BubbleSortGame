@@ -46,6 +46,7 @@ adj := [6]ray.Vector3 {
 level_to_goal_positions: [dynamic][dynamic]ray.Vector3
 current_level := 0
 
+
 main :: proc() {
 	using ray
 	game_clock := 0
@@ -58,6 +59,9 @@ main :: proc() {
 	SetConfigFlags({.VSYNC_HINT})
 	InitWindow(i32(SCREEN_X_DIM), i32(SCREEN_Y_DIM), "First Odin Game2")
 
+	last_place_time: f64 = -1000
+	last_break_time: f64 = -1000
+	place_delay := .25
 	tile_dim: f32 = 1
 	NON_EXISTANT_POS :: ray.Vector3{1000, 1000, 1000}
 	ray.SetTargetFPS(60)
@@ -90,14 +94,31 @@ main :: proc() {
 	// defer delete(all_pipes)
 	MAX_LEVELS :: 8
 	MAX_GOALS :: 5
+	current_level = 2
 
 	level_to_goal_positions = make([dynamic][dynamic]Vector3)
 	append(&level_to_goal_positions, [dynamic]Vector3{})
 	append_elems(
-		&level_to_goal_positions[0],
+		&level_to_goal_positions[len(level_to_goal_positions) - 1],
 		Vector3{center_coord, 4, center_coord},
-		Vector3{center_coord, 6, center_coord},
 	)
+
+	append(&level_to_goal_positions, [dynamic]Vector3{})
+	append_elems(
+		&level_to_goal_positions[len(level_to_goal_positions) - 1],
+		Vector3{center_coord - 1, 4, center_coord},
+		Vector3{center_coord + 1, 4, center_coord},
+	)
+
+	append(&level_to_goal_positions, [dynamic]Vector3{})
+	append_elems(
+		&level_to_goal_positions[len(level_to_goal_positions) - 1],
+		Vector3{center_coord - 1, 4, center_coord},
+		Vector3{center_coord + 1, 4, center_coord},
+		Vector3{center_coord, 4, center_coord + 1},
+		Vector3{center_coord, 5, center_coord},
+	)
+
 	generator_pos: Vector3 = {center_coord, 1, center_coord}
 	// all_goal_positions : [5]Vector3
 	// for i in 0..<len(all_goal_positions) {
@@ -178,11 +199,29 @@ main :: proc() {
 		}
 
 		if existing_pos_being_targeted != NON_EXISTANT_POS {
-			if IsMouseButtonPressed(MouseButton.LEFT) {
+			if position_to_pipe[existing_pos_being_targeted].pipe_type == .NORMAL &&
+			   (IsMouseButtonPressed(MouseButton.LEFT) ||
+					   (IsMouseButtonDown(MouseButton.LEFT) &&
+							   GetTime() - last_break_time >= place_delay)) {
+				last_break_time = GetTime()
 				unordered_remove(&all_pipes, existing_pos_being_targeted_index)
 			}
-			if IsMouseButtonPressed(MouseButton.RIGHT) {
-				append(&all_pipes, Pipe{pos = pos_to_place_at, pipe_type = .NORMAL})
+			if IsMouseButtonPressed(MouseButton.RIGHT) ||
+			   (IsMouseButtonDown(MouseButton.RIGHT) &&
+					   GetTime() - last_place_time >= place_delay) {
+				last_place_time = GetTime()
+				// TODO: add reject sound
+				if pos_to_place_at.x < 0 ||
+				   pos_to_place_at.x >= board_dim ||
+				   pos_to_place_at.y < 0 ||
+				   pos_to_place_at.y >= board_dim * 2 ||
+				   pos_to_place_at.z < 0 ||
+				   pos_to_place_at.z >= board_dim {
+
+				} else {
+					append(&all_pipes, Pipe{pos = pos_to_place_at, pipe_type = .NORMAL})
+				}
+
 			}
 			buffer: f32 = 0.03
 			DrawCubeWires(
@@ -199,9 +238,10 @@ main :: proc() {
 		// if IsKeyPressed(KeyboardKey.F) {
 		// 	fmt.println(path_found)
 		// }
+		amount_per_round := 5
 		if len(path_found) > 0 && is_flowing && remaining_to_send > 0 {
-			pos_to_collected[path_found[len(path_found) - 1]] += 1
-			remaining_to_send -= 1
+			pos_to_collected[path_found[len(path_found) - 1]] += amount_per_round
+			remaining_to_send -= amount_per_round
 			fmt.println(pos_to_collected)
 		}
 
@@ -214,9 +254,11 @@ main :: proc() {
 			}
 		} */
 		for pos in position_to_pipe {
+			found := false
 			for offset in adj {
 				connected_pos := pos + offset
 				if connected_pos in position_to_pipe {
+					found = true
 					lower := pos
 					higher := connected_pos
 					if pos.x > connected_pos.x ||
@@ -231,6 +273,12 @@ main :: proc() {
 					DrawCylinderEx(lower, higher, radius, radius, side_count, WHITE)
 					DrawCylinderWiresEx(lower, higher, radius, radius, side_count, BLACK)
 				}
+			}
+			if !found {
+				DrawSphere(pos, radius, WHITE)
+				DrawSphereWires(pos, radius + .01, side_count, side_count, BLACK)
+				// DrawCylinderEx(lower, higher, radius, radius, side_count, WHITE)
+				// DrawCylinderWiresEx(lower, higher, radius, radius, side_count, BLACK)
 			}
 		}
 
