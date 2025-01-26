@@ -9,3 +9,22 @@
 #DONE reset distributed power
 #DONE reset pipes placed
 
+
+
+for export:
+copy over the game assets folder
+(should just be able to copy entire contents and it works)
+
+give remaining a background (larger font)
+
+bubbles traveling up pipe
+fix input issues
+
+make deterministic where outputs go
+once flow starts, don't allow breaking
+
+make q and  and down
+e up
+q down
+
+button to start flow

@@ -51,15 +51,22 @@ last_break_time: f64 = -1000
 tile_dim: f32 : 1
 place_delay :: .25
 board_dim: f32
-remaining_to_send :int 
-DEFAULT_REMAINING_TO_SEND :: 1000
+remaining_to_send: int
+DEFAULT_REMAINING_TO_SEND :: 400
 center_coord: f32
 generator_pos: ray.Vector3
-pos_to_collected: map[ray.Vector3]int
+pos_to_remaining_needed: map[ray.Vector3]int
 game_clock := 0
+time_to_advance := 100000000
+is_advancing := false
 tracking_allocator: mem.Tracking_Allocator
 ACCEPTOR_CAP :: 100
 is_cheat_mode := false
+
+//sounds
+level_complete_sound: ray.Sound
+place_sound: ray.Sound
+deny_sound: ray.Sound
 
 init :: proc() {
 	using ray
@@ -83,6 +90,11 @@ init :: proc() {
 	board_dim = 7
 	center_coord = f32(int(board_dim / 2))
 	generator_pos = {center_coord, 1, center_coord}
+
+	// load sounds
+	level_complete_sound = LoadSound("assets/bell.wav")
+	place_sound = LoadSound("assets/place.wav")
+	deny_sound = LoadSound("assets/deny.wav")
 
 	camera_3d = {
 		fovy       = 45,
@@ -119,6 +131,22 @@ init :: proc() {
 	append(&level_to_goal_positions, [dynamic]Vector3{})
 	append_elems(
 		&level_to_goal_positions[len(level_to_goal_positions) - 1],
+		Vector3{center_coord - 1, 6, center_coord},
+		Vector3{center_coord + 2, 5, center_coord},
+		// Vector3{center_coord, 5, center_coord},
+	)
+
+	append(&level_to_goal_positions, [dynamic]Vector3{})
+	append_elems(
+		&level_to_goal_positions[len(level_to_goal_positions) - 1],
+		Vector3{center_coord - 1, 4, center_coord},
+		Vector3{center_coord + 1, 4, center_coord},
+		Vector3{center_coord, 5, center_coord},
+	)
+
+	append(&level_to_goal_positions, [dynamic]Vector3{})
+	append_elems(
+		&level_to_goal_positions[len(level_to_goal_positions) - 1],
 		Vector3{center_coord - 1, 4, center_coord},
 		Vector3{center_coord + 1, 4, center_coord},
 		Vector3{center_coord, 4, center_coord - 1},
@@ -129,10 +157,16 @@ init :: proc() {
 	reset_remaining_bubbles()
 }
 
+play_sound_with_variance :: proc(sound: ray.Sound) {
+	ray.SetSoundPitch(sound, rand.float32_range(.8, 1.2))
+	ray.PlaySound(sound)
+}
+
 reset_pipes :: proc() {
 	using ray
 	clear(&all_pipes)
-	clear(&pos_to_collected)
+	clear(&pos_to_remaining_needed)
+
 	// floor
 	for x: f32 = 0; x < board_dim; x += tile_dim {
 		for z: f32 = 0; z < board_dim; z += tile_dim {
@@ -142,14 +176,16 @@ reset_pipes :: proc() {
 	}
 	generator_pos = {center_coord, 1, center_coord}
 	append(&all_pipes, Pipe{pos = generator_pos, pipe_type = .GENERATOR})
+	default_amount_needed_to_satisfy_goal := 100
 	for goal_pos in level_to_goal_positions[current_level] {
 		append(&all_pipes, Pipe{pos = goal_pos, pipe_type = .ACCEPTOR})
+		pos_to_remaining_needed[goal_pos] = default_amount_needed_to_satisfy_goal
 	}
 }
 
 reset_remaining_bubbles :: proc() {
 	remaining_to_send = DEFAULT_REMAINING_TO_SEND
-}	
+}
 
 advance_level :: proc() {
 	current_level += 1
@@ -157,6 +193,7 @@ advance_level :: proc() {
 }
 
 setup_for_level :: proc() {
+	is_advancing = false
 	reset_pipes()
 	reset_remaining_bubbles()
 
@@ -166,7 +203,7 @@ setup_for_level :: proc() {
 update :: proc() {
 	using ray
 	check_exit_keys()
-	UpdateCamera(&camera_3d, .FREE)
+	// UpdateCamera(&camera_3d, .FIRST_PERSON)
 	if is_cheat_mode {
 		if IsKeyPressed(.BACKSPACE) && current_level > 0 {
 			current_level -= 1
@@ -184,12 +221,34 @@ update :: proc() {
 	}
 
 
-	if IsKeyDown(KeyboardKey.LEFT_SHIFT) {
-		up := GetCameraUp(&camera_3d)
-		move_speed := 5.4 * GetFrameTime()
-		up *= move_speed
-		camera_3d.position -= up
-		camera_3d.target -= up
+	distance: f32 = 5.4
+	move_speed := 5.4 * GetFrameTime()
+	move_amount := GetCameraUp(&camera_3d) * move_speed
+	if IsKeyDown(KeyboardKey.W) {
+		CameraMoveForward(&camera_3d, move_speed, true)
+	}
+	if IsKeyDown(KeyboardKey.A) {
+		CameraMoveRight(&camera_3d, -move_speed, GetFrameTime())
+	}
+	if IsKeyDown(KeyboardKey.S) {
+		CameraMoveForward(&camera_3d, -move_speed, true)
+	}
+	if IsKeyDown(KeyboardKey.D) {
+		CameraMoveRight(&camera_3d, move_speed, GetFrameTime())
+	}
+	rotate_speed :f32= 0.2
+	CameraYaw(&camera_3d, -rotate_speed*GetMouseDelta().x*GetFrameTime(), false)
+	CameraPitch(&camera_3d, -rotate_speed*GetMouseDelta().y*GetFrameTime(), true, false, false)
+	// GetMouseDelta()
+	// CameraMoveForward()
+
+	if IsKeyDown(KeyboardKey.LEFT_SHIFT) || IsKeyDown(KeyboardKey.Q) {
+		camera_3d.position -= move_amount
+		camera_3d.target -= move_amount
+	}
+	if IsKeyDown(KeyboardKey.SPACE) || IsKeyDown(KeyboardKey.E) {
+		camera_3d.position += move_amount
+		camera_3d.target += move_amount
 	}
 	position_to_pipe := make(map[Vector3]Pipe)
 	defer delete(position_to_pipe)
@@ -220,6 +279,13 @@ update :: proc() {
 			camera_ray,
 			BoundingBox{cube_pos - tile_dim_halfs, cube_pos + tile_dim_halfs},
 		)
+		if pipe.pipe_type == .NORMAL {
+			result_ray_collision = GetRayCollisionBox(
+				camera_ray,
+				BoundingBox{cube_pos - tile_dim_halfs * .8, cube_pos + tile_dim_halfs * .8},
+			)
+		}
+
 		color_to_use: Color
 		switch pipe.pipe_type {
 		case .DEAD:
@@ -230,21 +296,42 @@ update :: proc() {
 			color_to_use = BROWN
 		case .ACCEPTOR:
 			color_to_use = RED
+			if cube_pos in pos_to_remaining_needed && pos_to_remaining_needed[cube_pos] == 0 {
+				color_to_use = PINK
+			}
 		}
 		if color_to_use != DARKGRAY {
 			// color_to_use.a = 20
 		}
 
 		if !has_hit && result_ray_collision.hit {
-			pos_to_place_at = cube_pos + (result_ray_collision.normal * tile_dim)
+			// fmt.println(result_ray_collision.normal)
+			closest := NON_EXISTANT_POS
+			highest: f32 = -10
+			for dir in adj {
+				temp := Vector3DotProduct(dir, result_ray_collision.normal)
+				if temp > highest {
+					highest = temp
+					closest = dir
+				}
+			}
+			pos_to_place_at = cube_pos + (closest * tile_dim)
 			has_hit = true
 			existing_pos_being_targeted_index = index
 			existing_pos_being_targeted = cube_pos
 		}
-		if pipe.pipe_type != .NORMAL {
+		if pipe.pipe_type == .ACCEPTOR || pipe.pipe_type == .GENERATOR {
+			DrawSphere(cube_pos, tile_dim / 2, color_to_use)
+		}
+		if pipe.pipe_type == .DEAD {
 			DrawCube(cube_pos, tile_dim, tile_dim, tile_dim, color_to_use)
 		}
-		DrawCubeWires(cube_pos, tile_dim + .01, tile_dim + .01, tile_dim + .01, WHITE)
+
+		if pipe.pipe_type == .NORMAL {
+			// DrawCubeWires(cube_pos, tile_dim *.8, tile_dim *.8, tile_dim *.8, WHITE)
+		} else {
+			DrawCubeWires(cube_pos, tile_dim + .01, tile_dim + .01, tile_dim + .01, WHITE)
+		}
 	}
 
 	if existing_pos_being_targeted != NON_EXISTANT_POS {
@@ -254,6 +341,7 @@ update :: proc() {
 						   GetTime() - last_break_time >= place_delay)) {
 			last_break_time = GetTime()
 			unordered_remove(&all_pipes, existing_pos_being_targeted_index)
+			play_sound_with_variance(place_sound)
 		}
 		if IsMouseButtonPressed(MouseButton.RIGHT) ||
 		   (IsMouseButtonDown(MouseButton.RIGHT) && GetTime() - last_place_time >= place_delay) {
@@ -265,20 +353,23 @@ update :: proc() {
 			   pos_to_place_at.y >= board_dim * 2 ||
 			   pos_to_place_at.z < 0 ||
 			   pos_to_place_at.z >= board_dim {
-
+				play_sound_with_variance(deny_sound)
 			} else {
-				append(&all_pipes, Pipe{pos = pos_to_place_at, pipe_type = .NORMAL})
+				if pos_to_place_at not_in position_to_pipe {
+					append(&all_pipes, Pipe{pos = pos_to_place_at, pipe_type = .NORMAL})
+					play_sound_with_variance(place_sound)
+				}
 			}
 
 		}
 		buffer: f32 = 0.03
-		DrawCubeWires(
-			existing_pos_being_targeted + {0, 0.01, 0},
-			tile_dim + buffer,
-			tile_dim + buffer,
-			tile_dim + buffer,
-			PINK,
-		)
+
+		box_to_use: Vector3 = Vector3{tile_dim + buffer, tile_dim + buffer, tile_dim + buffer}
+		if position_to_pipe[existing_pos_being_targeted].pipe_type == .NORMAL {
+			// make it smaller when a pipe is being looked at
+			box_to_use *= .8
+		}
+		DrawCubeWiresV(existing_pos_being_targeted + {0, 0.01, 0}, box_to_use, PINK)
 	}
 	path_found := get_path(&all_pipes, generator_pos, &level_to_goal_positions[current_level])
 	// if IsKeyPressed(KeyboardKey.F) {
@@ -286,31 +377,37 @@ update :: proc() {
 	// }
 	amount_per_round := 5
 	if len(path_found) > 0 && remaining_to_send > 0 {
-		if pos_to_collected[path_found[len(path_found) - 1]] + amount_per_round <= ACCEPTOR_CAP {
-			pos_to_collected[path_found[len(path_found) - 1]] += amount_per_round
+		if pos_to_remaining_needed[path_found[len(path_found) - 1]] - amount_per_round >= 0 {
+			pos_to_remaining_needed[path_found[len(path_found) - 1]] -= amount_per_round
 		}
 		remaining_to_send -= amount_per_round
 	}
 
 	satisfied_collector_count := 0
-	for pos, amount in pos_to_collected {
-		if amount == ACCEPTOR_CAP {
+	for pos, amount in pos_to_remaining_needed {
+		if amount == 0 {
 			satisfied_collector_count += 1
 		}
 	}
-	if satisfied_collector_count == len(level_to_goal_positions[current_level]) {
+	if !is_advancing && satisfied_collector_count == len(level_to_goal_positions[current_level]) {
 		// TODO: add some delay
-		advance_level()
+		play_sound_with_variance(level_complete_sound)
+		time_to_advance = game_clock + 90
+		is_advancing = true
+		// advance_level()
 	}
 
 	radius: f32 = .4
 	side_count: i32 = 8
-	
-	for pos in position_to_pipe {
+
+	for pos, pipe in position_to_pipe {
 		found := false
+		if pipe.pipe_type == .DEAD do continue
+
 		for offset in adj {
 			connected_pos := pos + offset
-			if connected_pos in position_to_pipe {
+			if connected_pos in position_to_pipe &&
+			   position_to_pipe[connected_pos].pipe_type != .DEAD {
 				found = true
 				lower := pos
 				higher := connected_pos
@@ -338,11 +435,11 @@ update :: proc() {
 	font_size: f32 = 50
 	spacing: f32 = 0
 	DrawText(fmt.ctprint("Remaining:", remaining_to_send), 10, 10, 24, BLACK)
-	DrawText(fmt.ctprint("Level:", current_level), 10, 60, 24, BLACK)
+	DrawText(fmt.ctprint("Level:", current_level + 1), 10, 40, 24, BLACK)
 	for goal_pos in level_to_goal_positions[current_level] {
 		cube_screen_pos := GetWorldToScreen(goal_pos, camera_3d)
 		DrawText(
-			fmt.ctprint(pos_to_collected[goal_pos]),
+			fmt.ctprint(pos_to_remaining_needed[goal_pos]),
 			i32(cube_screen_pos.x),
 			i32(cube_screen_pos.y + tile_dim),
 			40,
@@ -355,6 +452,10 @@ update :: proc() {
 	DrawCircle(i32(screen_center.x), i32(screen_center.y), 5, LIGHTGRAY)
 	EndDrawing()
 	game_clock += 1
+	if game_clock >= time_to_advance {
+		advance_level()
+		time_to_advance = max(int) / 2
+	}
 	// if len(path_found) > 0 {
 	// 	free(&path_found)
 	// }
@@ -390,7 +491,7 @@ get_path :: proc(
 	// append_elem(&fringe, start)
 	cur_path_copy: [dynamic]Vector3
 	fringe_top: for len(fringe) > 0 {
-		cur_path := pop_front(&fringe)
+		cur_path := pop(&fringe)
 		defer delete(cur_path)
 		cur := cur_path[len(cur_path) - 1]
 		if !slice.contains(all_positions[:], cur) || slice.contains(seen[:], cur) {
@@ -419,7 +520,7 @@ get_path :: proc(
 			}
 			return score + int(rand.float32_range(0, 4))
 		}
-		slice.sort_by(adj[:], proc(a, b: Vector3) -> bool {
+		slice.reverse_sort_by(adj[:], proc(a, b: Vector3) -> bool {
 			return get_score(a) < get_score(b)
 		})
 
