@@ -13,7 +13,7 @@ import "core:strings"
 import ray "vendor:raylib"
 
 //declare globals:
-SCREEN_X_DIM :: 1280
+SCREEN_X_DIM :: 1281
 SCREEN_Y_DIM :: 720
 should_run_game := true
 camera_3d: ray.Camera3D
@@ -44,8 +44,8 @@ adj := [6]ray.Vector3 {
 level_to_goal_positions: [dynamic][dynamic]ray.Vector3
 current_level := 0
 all_pipes: [dynamic]Pipe
-screen_center := ray.Vector2{SCREEN_X_DIM / 2, SCREEN_Y_DIM / 2}
-NON_EXISTANT_POS :: ray.Vector3{1000, 1000, 1000}
+screen_center: ray.Vector2
+NON_EXISTANT_POS: ray.Vector3
 
 flow_text_pos := 0
 tile_dims_vector: ray.Vector3
@@ -79,30 +79,49 @@ pop_sound: ray.Sound
 full_sound: ray.Sound
 background_sound: ray.Sound
 
+default_font: ray.Font
+
+fixed_right_movement :: proc(cam: ^ray.Camera3D, amount: f32) {
+	using ray
+	right := GetCameraRight(cam)
+	cam.position += right * amount
+	cam.target += right * amount
+}
 
 init :: proc() {
 	using ray
+	// if ray.WindowShouldClose() {
+	// 	return
+	// }
+	// if ray.WindowShouldClose() {
+	// 	return
+	// }
+	when ODIN_OS != .JS {
+		default_allocator := context.allocator
+		mem.tracking_allocator_init(&tracking_allocator, default_allocator)
+		context.allocator = mem.tracking_allocator(&tracking_allocator)
+	}
 
-	default_allocator := context.allocator
-	mem.tracking_allocator_init(&tracking_allocator, default_allocator)
-	context.allocator = mem.tracking_allocator(&tracking_allocator)
-
+	NON_EXISTANT_POS = ray.Vector3{1000, 1000, 1000}
+	screen_center = ray.Vector2{SCREEN_X_DIM / 2, SCREEN_Y_DIM / 2}
 	SetConfigFlags({.VSYNC_HINT})
 	InitWindow(i32(SCREEN_X_DIM), i32(SCREEN_Y_DIM), "First Odin Game2")
 	is_cheat_mode = ODIN_OS == .Windows
-	SetExitKey(nil)
-	// fmt.println(is_cheat_mode)
+	log.info("Test1")
+	// SetExitKey(nil)
+	// log.info(is_cheat_mode)
 
 	tile_dims_vector = Vector3{tile_dim, tile_dim, tile_dim}
 	tile_dim_halfs = tile_dims_vector / 2
 
 	ray.SetTargetFPS(60)
 	InitAudioDevice()
-	default_font := ray.GetFontDefault()
+	default_font = ray.GetFontDefault()
 	DisableCursor()
 	board_dim = 7
 	center_coord = f32(int(board_dim / 2))
 	generator_pos = {center_coord, 1, center_coord}
+	log.info("Test2")
 
 	// load sounds
 	level_complete_sound = LoadSound("assets/bell.wav")
@@ -124,6 +143,7 @@ init :: proc() {
 
 	all_pipes = make([dynamic]Pipe, context.allocator)
 	// defer delete(all_pipes)
+	log.info("Test3")
 
 	// defer free(&all_pipes)
 	// reset_pipes()
@@ -152,6 +172,7 @@ init :: proc() {
 		Vector3{center_coord - 1, 4, center_coord},
 		Vector3{center_coord, 5, center_coord},
 	)
+	log.info("Test4")
 
 	append(&level_to_goal_positions, [dynamic]Vector3{})
 	append_elems(
@@ -169,6 +190,7 @@ init :: proc() {
 		Vector3{center_coord, 4, center_coord - 1},
 		Vector3{center_coord, 5, center_coord},
 	)
+	log.info("Test21")
 
 	setup_for_level()
 }
@@ -206,7 +228,7 @@ reset_remaining_bubbles :: proc() {
 
 advance_level :: proc() {
 	current_level += 1
-	if current_level == len(level_to_goal_positions) {
+	if current_level >= len(level_to_goal_positions) {
 		game_over = true
 	} else {
 		setup_for_level()
@@ -214,6 +236,9 @@ advance_level :: proc() {
 }
 
 setup_for_level :: proc() {
+	if game_over {
+		return
+	}
 	is_advancing = false
 	animation_start_time = f32(game_clock)
 	reset_pipes()
@@ -229,8 +254,30 @@ reset_flow :: proc() {
 	}
 }
 
+show_game_over_screen :: proc() {
+	using ray
+	BeginDrawing()
+	ClearBackground(SKYBLUE)
+	DrawTextPro(
+		GetFontDefault(),
+		"You Win!",
+		Vector2{SCREEN_X_DIM / 2, SCREEN_Y_DIM / 3},
+		Vector2{},
+		0,
+		50,
+		10,
+		BLACK,
+	)
+	EndDrawing()
+}
+
+
 update :: proc() {
 	using ray
+	if game_clock < 200 {
+		game_clock += 1
+		return
+	}
 	check_exit_keys()
 	// UpdateCamera(&camera_3d, .FIRST_PERSON)
 	if is_cheat_mode {
@@ -238,10 +285,19 @@ update :: proc() {
 			current_level -= 1
 			setup_for_level()
 		}
-		if IsKeyPressed(.BACKSLASH) && current_level + 1 < len(level_to_goal_positions) {
+		if IsKeyPressed(.BACKSLASH)  {
 			current_level += 1
+			if current_level >= len(level_to_goal_positions) {
+				game_over = true
+			}
 			setup_for_level()
 		}
+	}
+	// TEMP:
+
+	if game_over {
+		show_game_over_screen()
+		return
 	}
 
 	if IsKeyPressed(.R) {
@@ -256,25 +312,30 @@ update :: proc() {
 		SetMasterVolume(1 - GetMasterVolume())
 	}
 
-
 	distance: f32 = 5.4
-	move_speed := 5.4 * GetFrameTime()
+	move_speed: f32 = 5.4 * GetFrameTime()
 	move_amount := GetCameraUp(&camera_3d) * move_speed
 	if IsKeyDown(KeyboardKey.W) {
 		CameraMoveForward(&camera_3d, move_speed, true)
 	}
 	if IsKeyDown(KeyboardKey.A) {
-		CameraMoveRight(&camera_3d, -move_speed, GetFrameTime())
+		fixed_right_movement(&camera_3d, -move_speed)
 	}
 	if IsKeyDown(KeyboardKey.S) {
 		CameraMoveForward(&camera_3d, -move_speed, true)
 	}
 	if IsKeyDown(KeyboardKey.D) {
-		CameraMoveRight(&camera_3d, move_speed, GetFrameTime())
+		fixed_right_movement(&camera_3d, move_speed)
 	}
 	rotate_speed: f32 = 0.2
-	CameraYaw(&camera_3d, -rotate_speed * GetMouseDelta().x * GetFrameTime(), false)
-	CameraPitch(&camera_3d, -rotate_speed * GetMouseDelta().y * GetFrameTime(), true, false, false)
+	CameraYaw(&camera_3d, -rotate_speed * math.round(GetMouseDelta().x) * GetFrameTime(), false)
+	CameraPitch(
+		&camera_3d,
+		-rotate_speed * math.round(GetMouseDelta().y) * GetFrameTime(),
+		true,
+		false,
+		false,
+	)
 	// GetMouseDelta()
 	// CameraMoveForward()
 
@@ -288,7 +349,6 @@ update :: proc() {
 	}
 	position_to_pipe := make(map[Vector3]Pipe)
 	defer delete(position_to_pipe)
-	clear(&position_to_pipe)
 	for pipe in all_pipes {
 		position_to_pipe[pipe.pos] = pipe
 	}
@@ -427,6 +487,7 @@ update :: proc() {
 		generator_pos,
 		&level_to_goal_positions[current_level],
 	)
+	defer delete(goals_to_deposit_into)
 
 	amount_per_round := 1
 
@@ -540,15 +601,11 @@ update :: proc() {
 	rect := Rectangle{-10, -10, 280, 140}
 	DrawRectangleRec(rect, BLACK)
 	DrawRectangleLinesEx(rect, 3, GRAY)
-	text := fmt.ctprint(
-		"Remaining:",
-		remaining_to_send,
-		fmt.ctprint("\nLevel:", current_level + 1),
-	)
+	text := fmt.ctprint("Remaining:", remaining_to_send)
 	DrawText(text, 10, 10, 24, RAYWHITE)
 	if len(goals_to_deposit_into) > 0 && game_clock / 30 % 2 == 0 {
-		text = fmt.ctprint("Press F to toggle/\nreset flowing!", sep = "\n")
-		DrawText(text, 10, 60, 24, RED)
+		text2 := fmt.ctprint("Press F to toggle/\nreset flowing!")
+		DrawText(text2, 10, 60, 24, RED)
 	}
 	if current_level >= 2 {
 		hint_rect := Rectangle{-5, SCREEN_Y_DIM / 2 - 10, 250, 150}
@@ -591,6 +648,7 @@ update :: proc() {
 		PlaySound(background_sound)
 	}
 	free_all(context.temp_allocator)
+
 }
 
 SearchState :: struct {
@@ -604,7 +662,7 @@ get_connected_goal_locations :: proc(
 	goal_positions: ^[dynamic]ray.Vector3,
 ) -> [dynamic]ray.Vector3 {
 	using ray
-	all_ending_locations := make([dynamic]Vector3)
+	all_ending_locations := make([dynamic]Vector3, context.temp_allocator)
 
 	all_positions := make([dynamic]Vector3, context.temp_allocator)
 	for &pipe in all_pipes {
@@ -613,7 +671,7 @@ get_connected_goal_locations :: proc(
 	fringe: queue.Queue(SearchState)
 	// queue.init(queue.Queue, 40, context.temp_allocator)
 	// append_elem(fringe, )
-	starting_state := SearchState{start, make([dynamic]Vector3)}
+	starting_state := SearchState{start, make([dynamic]Vector3, context.temp_allocator)}
 	queue.init(&fringe, 80, context.temp_allocator)
 	queue.push_front(&fringe, starting_state)
 
@@ -667,7 +725,7 @@ get_connected_goal_locations :: proc(
 				continue
 			}
 
-			new_seen := make([dynamic]Vector3)
+			new_seen := make([dynamic]Vector3, context.temp_allocator)
 			for visited in seen {
 				append_elem(&new_seen, visited)
 			}
