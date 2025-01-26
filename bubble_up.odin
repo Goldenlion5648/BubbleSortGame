@@ -5,6 +5,7 @@ import "core:container/queue"
 import "core:fmt"
 import "core:log"
 import "core:math"
+import "core:math/ease"
 import "core:math/rand"
 import "core:mem"
 import "core:slice"
@@ -16,6 +17,8 @@ SCREEN_X_DIM :: 1280
 SCREEN_Y_DIM :: 720
 should_run_game := true
 camera_3d: ray.Camera3D
+
+ANIMATION_DURATION :: 150
 
 PipeType :: enum {
 	NORMAL = 0,
@@ -52,7 +55,7 @@ tile_dim: f32 : 1
 place_delay :: .25
 board_dim: f32
 remaining_to_send: int
-DEFAULT_REMAINING_TO_SEND :: 400
+DEFAULT_REMAINING_TO_SEND :: 500
 center_coord: f32
 generator_pos: ray.Vector3
 pos_to_remaining_needed: map[ray.Vector3]int
@@ -62,11 +65,15 @@ is_advancing := false
 tracking_allocator: mem.Tracking_Allocator
 ACCEPTOR_CAP :: 100
 is_cheat_mode := false
+animation_start_time: f32 = 0
+is_flowing := false
+
 
 //sounds
 level_complete_sound: ray.Sound
 place_sound: ray.Sound
 deny_sound: ray.Sound
+
 
 init :: proc() {
 	using ray
@@ -153,8 +160,7 @@ init :: proc() {
 		Vector3{center_coord, 5, center_coord},
 	)
 
-	reset_pipes()
-	reset_remaining_bubbles()
+	setup_for_level()
 }
 
 play_sound_with_variance :: proc(sound: ray.Sound) {
@@ -194,6 +200,7 @@ advance_level :: proc() {
 
 setup_for_level :: proc() {
 	is_advancing = false
+	animation_start_time = f32(game_clock)
 	reset_pipes()
 	reset_remaining_bubbles()
 
@@ -236,9 +243,9 @@ update :: proc() {
 	if IsKeyDown(KeyboardKey.D) {
 		CameraMoveRight(&camera_3d, move_speed, GetFrameTime())
 	}
-	rotate_speed :f32= 0.2
-	CameraYaw(&camera_3d, -rotate_speed*GetMouseDelta().x*GetFrameTime(), false)
-	CameraPitch(&camera_3d, -rotate_speed*GetMouseDelta().y*GetFrameTime(), true, false, false)
+	rotate_speed: f32 = 0.2
+	CameraYaw(&camera_3d, -rotate_speed * GetMouseDelta().x * GetFrameTime(), false)
+	CameraPitch(&camera_3d, -rotate_speed * GetMouseDelta().y * GetFrameTime(), true, false, false)
 	// GetMouseDelta()
 	// CameraMoveForward()
 
@@ -321,7 +328,20 @@ update :: proc() {
 			existing_pos_being_targeted = cube_pos
 		}
 		if pipe.pipe_type == .ACCEPTOR || pipe.pipe_type == .GENERATOR {
-			DrawSphere(cube_pos, tile_dim / 2, color_to_use)
+			animation_progress_decimal :=
+				(f32(game_clock) - animation_start_time) / ANIMATION_DURATION
+			DrawSphere(
+				cube_pos,
+				(tile_dim / 2) * ease.elastic_out(animation_progress_decimal),
+				color_to_use,
+			)
+			DrawSphereWires(
+				cube_pos,
+				(tile_dim / 2 + .01) * ease.elastic_out(animation_progress_decimal),
+				12,
+				4,
+				BLACK,
+			)
 		}
 		if pipe.pipe_type == .DEAD {
 			DrawCube(cube_pos, tile_dim, tile_dim, tile_dim, color_to_use)
@@ -400,9 +420,10 @@ update :: proc() {
 	radius: f32 = .4
 	side_count: i32 = 8
 
+	//draw connecting pipes (or a sphere if no adjacent pipes)
 	for pos, pipe in position_to_pipe {
 		found := false
-		if pipe.pipe_type == .DEAD do continue
+		if pipe.pipe_type != .NORMAL do continue
 
 		for offset in adj {
 			connected_pos := pos + offset
@@ -418,7 +439,14 @@ update :: proc() {
 				to_add := (higher - lower) * radius / 1.8
 				lower -= to_add
 				higher += to_add
-				DrawCylinderEx(lower, higher, radius, radius, side_count, WHITE)
+				DrawCylinderEx(
+					lower,
+					higher,
+					radius,
+					radius,
+					side_count,
+					Color{255, 255, 255, 255},
+				)
 				DrawCylinderWiresEx(lower, higher, radius, radius, side_count, BLACK)
 			}
 		}
@@ -432,6 +460,36 @@ update :: proc() {
 
 
 	EndMode3D()
+
+	for pos, pipe in position_to_pipe {
+		if pipe.pipe_type != .NORMAL do continue
+		for i in 0 ..< 4 {
+			rand.reset(u64(pos.x * 1000 + pos.y * 100 + pos.z * 10))
+			new_world_pos := pos
+			// new_world_pos.x += rand.float32_range(-.3, .3) 
+			// new_world_pos.y += rand.float32_range(-.3, .3) 
+			// new_world_pos.z += rand.float32_range(-.3, .3) 
+			new_world_pos.x += f32(i) * rand.float32_range(-9, -1) * pos.x * .137 + (f32(game_clock) / 277)
+			new_world_pos.y += f32(i) * rand.float32_range(-9, -1) * pos.y * .093 + (f32(game_clock) / 201)
+			new_world_pos.z += f32(i) * rand.float32_range(-9, -1) * pos.z * .393 + (f32(game_clock) / 217)
+			// left, right := math.modf(new_world_pos.x)
+			new_world_pos.x = pos.x - 0.3 + math.mod(new_world_pos.x, 0.4)
+			new_world_pos.y = pos.y - 0.3 + math.mod(new_world_pos.y, 0.4)
+			new_world_pos.z = pos.z - 0.3 + math.mod(new_world_pos.z, 0.4)
+			screen_pos := GetWorldToScreen(new_world_pos, camera_3d)
+			color_to_use := PINK
+			color_to_use.r -= u8(rand.float32_range(1, 7)*4)
+			color_to_use.g += u8(rand.float32_range(1, 9)*7)
+			color_to_use.b -= u8(rand.float32_range(1, 3)*3)
+			color_to_use.a = u8(rand.float32_range(100, 200))
+			DrawCircleV(
+				screen_pos,
+				10,
+				color_to_use,
+			)
+		}
+		// DrawSphere(pos, radius, RED)
+	}
 	font_size: f32 = 50
 	spacing: f32 = 0
 	DrawText(fmt.ctprint("Remaining:", remaining_to_send), 10, 10, 24, BLACK)
@@ -452,6 +510,7 @@ update :: proc() {
 	DrawCircle(i32(screen_center.x), i32(screen_center.y), 5, LIGHTGRAY)
 	EndDrawing()
 	game_clock += 1
+
 	if game_clock >= time_to_advance {
 		advance_level()
 		time_to_advance = max(int) / 2

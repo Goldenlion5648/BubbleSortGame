@@ -23,8 +23,8 @@ fix input issues
 make deterministic where outputs go
 once flow starts, don't allow breaking
 
-make q and  and down
-e up
-q down
+#DONE make q and  and down
+#DONE e up
+#DONE q down
 
 button to start flow
