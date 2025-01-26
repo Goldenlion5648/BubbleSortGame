@@ -17,14 +17,14 @@ copy over the game assets folder
 
 give remaining a background (larger font)
 
-bubbles traveling up pipe
-fix input issues
+#DONE bubbles traveling up pipe
+#DONE fix input issues
 
-make deterministic where outputs go
-once flow starts, don't allow breaking
+#DONE make deterministic where outputs go
+#DONE once flow starts, don't allow breaking
 
 #DONE make q and  and down
 #DONE e up
 #DONE q down
 
-button to start flow
+#DONE button to start flow

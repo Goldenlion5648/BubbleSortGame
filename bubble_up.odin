@@ -47,6 +47,7 @@ all_pipes: [dynamic]Pipe
 screen_center := ray.Vector2{SCREEN_X_DIM / 2, SCREEN_Y_DIM / 2}
 NON_EXISTANT_POS :: ray.Vector3{1000, 1000, 1000}
 
+flow_text_pos := 0
 tile_dims_vector: ray.Vector3
 tile_dim_halfs: ray.Vector3
 last_place_time: f64 = -1000
@@ -67,7 +68,8 @@ ACCEPTOR_CAP :: 100
 is_cheat_mode := false
 animation_start_time: f32 = 0
 is_flowing := false
-
+DEFAULT_AMOUNT_NEEDED_TO_SATISFY_GOAL :: 100
+game_over := false
 
 //sounds
 level_complete_sound: ray.Sound
@@ -75,6 +77,7 @@ place_sound: ray.Sound
 deny_sound: ray.Sound
 pop_sound: ray.Sound
 full_sound: ray.Sound
+background_sound: ray.Sound
 
 
 init :: proc() {
@@ -87,6 +90,7 @@ init :: proc() {
 	SetConfigFlags({.VSYNC_HINT})
 	InitWindow(i32(SCREEN_X_DIM), i32(SCREEN_Y_DIM), "First Odin Game2")
 	is_cheat_mode = ODIN_OS == .Windows
+	SetExitKey(nil)
 	// fmt.println(is_cheat_mode)
 
 	tile_dims_vector = Vector3{tile_dim, tile_dim, tile_dim}
@@ -106,6 +110,9 @@ init :: proc() {
 	deny_sound = LoadSound("assets/deny.wav")
 	pop_sound = LoadSound("assets/pop.wav")
 	full_sound = LoadSound("assets/full.wav")
+	background_sound = LoadSound("assets/background.wav")
+
+	SetSoundVolume(background_sound, .5)
 
 	camera_3d = {
 		fovy       = 45,
@@ -142,9 +149,8 @@ init :: proc() {
 	append(&level_to_goal_positions, [dynamic]Vector3{})
 	append_elems(
 		&level_to_goal_positions[len(level_to_goal_positions) - 1],
-		Vector3{center_coord - 1, 6, center_coord},
-		Vector3{center_coord + 2, 5, center_coord},
-		// Vector3{center_coord, 5, center_coord},
+		Vector3{center_coord - 1, 4, center_coord},
+		Vector3{center_coord, 5, center_coord},
 	)
 
 	append(&level_to_goal_positions, [dynamic]Vector3{})
@@ -175,7 +181,6 @@ play_sound_with_variance :: proc(sound: ray.Sound) {
 reset_pipes :: proc() {
 	using ray
 	clear(&all_pipes)
-	clear(&pos_to_remaining_needed)
 
 	// floor
 	for x: f32 = 0; x < board_dim; x += tile_dim {
@@ -186,20 +191,26 @@ reset_pipes :: proc() {
 	}
 	generator_pos = {center_coord, 1, center_coord}
 	append(&all_pipes, Pipe{pos = generator_pos, pipe_type = .GENERATOR})
-	default_amount_needed_to_satisfy_goal := 100
 	for goal_pos in level_to_goal_positions[current_level] {
 		append(&all_pipes, Pipe{pos = goal_pos, pipe_type = .ACCEPTOR})
-		pos_to_remaining_needed[goal_pos] = default_amount_needed_to_satisfy_goal
 	}
 }
 
 reset_remaining_bubbles :: proc() {
-	remaining_to_send = DEFAULT_REMAINING_TO_SEND
+	remaining_to_send = 100 * len(level_to_goal_positions[current_level])
+	clear(&pos_to_remaining_needed)
+	for goal_pos in level_to_goal_positions[current_level] {
+		pos_to_remaining_needed[goal_pos] = DEFAULT_AMOUNT_NEEDED_TO_SATISFY_GOAL
+	}
 }
 
 advance_level :: proc() {
 	current_level += 1
-	setup_for_level()
+	if current_level == len(level_to_goal_positions) {
+		game_over = true
+	} else {
+		setup_for_level()
+	}
 }
 
 setup_for_level :: proc() {
@@ -210,6 +221,13 @@ setup_for_level :: proc() {
 
 }
 
+
+reset_flow :: proc() {
+	is_flowing = !is_flowing
+	if is_flowing {
+		reset_remaining_bubbles()
+	}
+}
 
 update :: proc() {
 	using ray
@@ -229,6 +247,13 @@ update :: proc() {
 	if IsKeyPressed(.R) {
 		reset_pipes()
 		reset_remaining_bubbles()
+	}
+	if IsKeyPressed(.F) {
+		reset_flow()
+		// reset_pipes()
+	}
+	if IsKeyPressed(.M) {
+		SetMasterVolume(1 - GetMasterVolume())
 	}
 
 
@@ -316,7 +341,6 @@ update :: proc() {
 		}
 
 		if !has_hit && result_ray_collision.hit {
-			// fmt.println(result_ray_collision.normal)
 			closest := NON_EXISTANT_POS
 			highest: f32 = -10
 			for dir in adj {
@@ -366,6 +390,8 @@ update :: proc() {
 			last_break_time = GetTime()
 			unordered_remove(&all_pipes, existing_pos_being_targeted_index)
 			play_sound_with_variance(place_sound)
+			DisableCursor()
+			is_flowing = false
 		}
 		if IsMouseButtonPressed(MouseButton.RIGHT) ||
 		   (IsMouseButtonDown(MouseButton.RIGHT) && GetTime() - last_place_time >= place_delay) {
@@ -384,6 +410,7 @@ update :: proc() {
 					play_sound_with_variance(place_sound)
 				}
 			}
+			is_flowing = false
 
 		}
 		buffer: f32 = 0.03
@@ -395,26 +422,31 @@ update :: proc() {
 		}
 		DrawCubeWiresV(existing_pos_being_targeted + {0, 0.01, 0}, box_to_use, PINK)
 	}
-	path_found := get_path(&all_pipes, generator_pos, &level_to_goal_positions[current_level])
-	fmt.println(path_found)
-	// if IsKeyPressed(KeyboardKey.F) {
-	// 	fmt.println(path_found)
-	// }
-	amount_per_round := 5
-	// TEMP:
-	is_flowing = true
-	if is_flowing && len(path_found) > 0 && remaining_to_send > 0 {
-		if pos_to_remaining_needed[path_found[len(path_found) - 1]] - amount_per_round >= 0 {
-			pos_to_remaining_needed[path_found[len(path_found) - 1]] -= amount_per_round
-			if pos_to_remaining_needed[path_found[len(path_found) - 1]] % 20 == 0 {
-				play_sound_with_variance(pop_sound)
+	goals_to_deposit_into := get_connected_goal_locations(
+		&all_pipes,
+		generator_pos,
+		&level_to_goal_positions[current_level],
+	)
+
+	amount_per_round := 1
+
+	if is_flowing {
+		for end_point in goals_to_deposit_into {
+			if remaining_to_send == 0 {
+				break
 			}
-		} else {
-			if game_clock % 7 == 0 {
-				play_sound_with_variance(full_sound)
+			if pos_to_remaining_needed[end_point] - amount_per_round >= 0 {
+				pos_to_remaining_needed[end_point] -= amount_per_round
+				if pos_to_remaining_needed[end_point] % 4 == 0 {
+					play_sound_with_variance(pop_sound)
+				}
+			} else {
+				if game_clock % 7 == 0 {
+					play_sound_with_variance(full_sound)
+				}
 			}
+			remaining_to_send -= amount_per_round
 		}
-		remaining_to_send -= amount_per_round
 	}
 
 	satisfied_collector_count := 0
@@ -505,8 +537,32 @@ update :: proc() {
 	}
 	font_size: f32 = 50
 	spacing: f32 = 0
-	DrawText(fmt.ctprint("Remaining:", remaining_to_send), 10, 10, 24, BLACK)
-	DrawText(fmt.ctprint("Level:", current_level + 1), 10, 40, 24, BLACK)
+	rect := Rectangle{-10, -10, 280, 140}
+	DrawRectangleRec(rect, BLACK)
+	DrawRectangleLinesEx(rect, 3, GRAY)
+	text := fmt.ctprint(
+		"Remaining:",
+		remaining_to_send,
+		fmt.ctprint("\nLevel:", current_level + 1),
+	)
+	DrawText(text, 10, 10, 24, RAYWHITE)
+	if len(goals_to_deposit_into) > 0 && game_clock / 30 % 2 == 0 {
+		text = fmt.ctprint("Press F to toggle/\nreset flowing!", sep = "\n")
+		DrawText(text, 10, 60, 24, RED)
+	}
+	if current_level >= 2 {
+		hint_rect := Rectangle{-5, SCREEN_Y_DIM / 2 - 10, 250, 150}
+		DrawRectangleRec(hint_rect, BLACK)
+		DrawRectangleLinesEx(hint_rect, abs(f32(game_clock % 60) / 3 - 10), RAYWHITE)
+		DrawText(
+			"Bubbles first try \nto flow up, then\n try horizontally,\n then try down.",
+			10,
+			SCREEN_Y_DIM / 2,
+			24,
+			RED,
+		)
+	}
+	// DrawText(fmt.ctprint("Level:", current_level + 1), 10, 40, 24, RAYWHITE)
 	for goal_pos in level_to_goal_positions[current_level] {
 		cube_screen_pos := GetWorldToScreen(goal_pos, camera_3d)
 		DrawText(
@@ -531,41 +587,44 @@ update :: proc() {
 	// if len(path_found) > 0 {
 	// 	free(&path_found)
 	// }
+	if !IsSoundPlaying(background_sound) {
+		PlaySound(background_sound)
+	}
 	free_all(context.temp_allocator)
 }
 
+SearchState :: struct {
+	pos:  ray.Vector3,
+	seen: [dynamic]ray.Vector3,
+}
 
-get_path :: proc(
+get_connected_goal_locations :: proc(
 	all_pipes: ^[dynamic]Pipe,
 	start: ray.Vector3,
 	goal_positions: ^[dynamic]ray.Vector3,
 ) -> [dynamic]ray.Vector3 {
 	using ray
+	all_ending_locations := make([dynamic]Vector3)
 
 	all_positions := make([dynamic]Vector3, context.temp_allocator)
 	for &pipe in all_pipes {
 		append_elem(&all_positions, pipe.pos)
 	}
-	fringe := make([dynamic][dynamic]Vector3)
-	append_elem(&fringe, [dynamic]Vector3{})
-	append_elem(&fringe[len(fringe) - 1], start)
+	fringe: queue.Queue(SearchState)
+	// queue.init(queue.Queue, 40, context.temp_allocator)
+	// append_elem(fringe, )
+	starting_state := SearchState{start, make([dynamic]Vector3)}
+	queue.init(&fringe, 80, context.temp_allocator)
+	queue.push_front(&fringe, starting_state)
 
-	defer {
-		for &x in fringe {
-			delete(x)
-		}
-		delete(fringe)
-	}
-	seen := make([dynamic]Vector3, context.temp_allocator)
 
-	bad_ret := make([dynamic]Vector3)
-
-	// append_elem(&fringe, start)
 	cur_path_copy: [dynamic]Vector3
-	fringe_top: for len(fringe) > 0 {
-		cur_path := pop(&fringe)
-		defer delete(cur_path)
-		cur := cur_path[len(cur_path) - 1]
+	fringe_top: for fringe.len > 0 {
+		cur_state := queue.pop_front(&fringe)
+		seen := &cur_state.seen
+		// fmt.println(seen)
+		// defer delete(cur_state.seen)
+		cur := cur_state.pos
 		if !slice.contains(all_positions[:], cur) || slice.contains(seen[:], cur) {
 			continue
 		}
@@ -575,15 +634,16 @@ get_path :: proc(
 			}
 		}
 
-		append_elem(&seen, cur)
+		append_elem(seen, cur)
 		if slice.contains(goal_positions[:], cur) {
-			return cur_path
-		}
-		if slice.contains(level_to_goal_positions[current_level][:], cur) {
+			append(&all_ending_locations, cur)
 			continue
+			// return cur_state
 		}
+		// if slice.contains(level_to_goal_positions[current_level][:], cur) {
+		// 	continue
+		// }
 		get_score :: proc(point: ray.Vector3) -> int {
-			rand.reset(u64(game_clock))
 			score := 0
 			if point == {0, 1, 0} {
 				score -= 1000
@@ -591,23 +651,41 @@ get_path :: proc(
 			if point == {0, -1, 0} {
 				score += 100_000
 			}
-			return score + int(rand.float32_range(0, 4))
+			return score
 		}
-		slice.reverse_sort_by(adj[:], proc(a, b: Vector3) -> bool {
+		slice.sort_by(adj[:], proc(a, b: Vector3) -> bool {
 			return get_score(a) < get_score(b)
 		})
 
-		for option in adj {
-			append_elem(&fringe, [dynamic]Vector3{})
-			fringe[len(fringe) - 1] = make([dynamic]Vector3, context.temp_allocator)
-			for elem in cur_path {
-				append_elem(&fringe[len(fringe) - 1], elem)
+		highest_score_used := 10_000_000
+		for option, j in adj {
+			new_pos := cur + option
+			if get_score(option) > highest_score_used {
+				break
 			}
-			append_elem(&fringe[len(fringe) - 1], cur + option)
+			if !slice.contains(all_positions[:], new_pos) || slice.contains(seen[:], new_pos) {
+				continue
+			}
+
+			new_seen := make([dynamic]Vector3)
+			for visited in seen {
+				append_elem(&new_seen, visited)
+			}
+			new_state := SearchState{new_pos, new_seen}
+			// append_elem(&fringe, [dynamic]Vector3{})
+			// fringe[len(fringe) - 1] = make([dynamic]Vector3, context.temp_allocator)
+			// for elem in cur_state {
+			// 	append_elem(&fringe[len(fringe) - 1], elem)
+			// }
+			queue.append_elem(&fringe, new_state)
+			highest_score_used = get_score(option)
+			// if j + 1 < len(adj) && get_score(adj[j + 1]) > get_score(adj[j]) {
+			// 	break
+			// }
 		}
 
 	}
-	return bad_ret
+	return all_ending_locations
 }
 
 check_exit_keys :: proc() {
@@ -617,6 +695,10 @@ check_exit_keys :: proc() {
 	   IsKeyDown(KeyboardKey.F8) {
 		should_run_game = false
 	}
+	// if IsKeyPressed(.ESCAPE) {
+	// 	EnableCursor()
+	// }
+
 }
 
 reset_tracking_allocator :: proc(a: ^mem.Tracking_Allocator) -> bool {
@@ -644,7 +726,7 @@ shutdown :: proc() {
 should_run :: proc() -> bool {
 	when ODIN_OS != .JS {
 		// Never run this proc in browser. It contains a 16 ms sleep on web!
-		if ray.WindowShouldClose() {
+		if ray.WindowShouldClose() || ray.IsKeyPressed(.ESCAPE) {
 			return false
 		}
 	}
