@@ -73,6 +73,8 @@ is_flowing := false
 level_complete_sound: ray.Sound
 place_sound: ray.Sound
 deny_sound: ray.Sound
+pop_sound: ray.Sound
+full_sound: ray.Sound
 
 
 init :: proc() {
@@ -102,6 +104,8 @@ init :: proc() {
 	level_complete_sound = LoadSound("assets/bell.wav")
 	place_sound = LoadSound("assets/place.wav")
 	deny_sound = LoadSound("assets/deny.wav")
+	pop_sound = LoadSound("assets/pop.wav")
+	full_sound = LoadSound("assets/full.wav")
 
 	camera_3d = {
 		fovy       = 45,
@@ -392,13 +396,23 @@ update :: proc() {
 		DrawCubeWiresV(existing_pos_being_targeted + {0, 0.01, 0}, box_to_use, PINK)
 	}
 	path_found := get_path(&all_pipes, generator_pos, &level_to_goal_positions[current_level])
+	fmt.println(path_found)
 	// if IsKeyPressed(KeyboardKey.F) {
 	// 	fmt.println(path_found)
 	// }
 	amount_per_round := 5
-	if len(path_found) > 0 && remaining_to_send > 0 {
+	// TEMP:
+	is_flowing = true
+	if is_flowing && len(path_found) > 0 && remaining_to_send > 0 {
 		if pos_to_remaining_needed[path_found[len(path_found) - 1]] - amount_per_round >= 0 {
 			pos_to_remaining_needed[path_found[len(path_found) - 1]] -= amount_per_round
+			if pos_to_remaining_needed[path_found[len(path_found) - 1]] % 20 == 0 {
+				play_sound_with_variance(pop_sound)
+			}
+		} else {
+			if game_clock % 7 == 0 {
+				play_sound_with_variance(full_sound)
+			}
 		}
 		remaining_to_send -= amount_per_round
 	}
@@ -469,24 +483,23 @@ update :: proc() {
 			// new_world_pos.x += rand.float32_range(-.3, .3) 
 			// new_world_pos.y += rand.float32_range(-.3, .3) 
 			// new_world_pos.z += rand.float32_range(-.3, .3) 
-			new_world_pos.x += f32(i) * rand.float32_range(-9, -1) * pos.x * .137 + (f32(game_clock) / 277)
-			new_world_pos.y += f32(i) * rand.float32_range(-9, -1) * pos.y * .093 + (f32(game_clock) / 201)
-			new_world_pos.z += f32(i) * rand.float32_range(-9, -1) * pos.z * .393 + (f32(game_clock) / 217)
+			new_world_pos.x +=
+				f32(i) * rand.float32_range(-9, -1) * pos.x * .137 + (f32(game_clock) / 277)
+			new_world_pos.y +=
+				f32(i) * rand.float32_range(-9, -1) * pos.y * .093 + (f32(game_clock) / 201)
+			new_world_pos.z +=
+				f32(i) * rand.float32_range(-9, -1) * pos.z * .393 + (f32(game_clock) / 217)
 			// left, right := math.modf(new_world_pos.x)
 			new_world_pos.x = pos.x - 0.3 + math.mod(new_world_pos.x, 0.4)
 			new_world_pos.y = pos.y - 0.3 + math.mod(new_world_pos.y, 0.4)
 			new_world_pos.z = pos.z - 0.3 + math.mod(new_world_pos.z, 0.4)
 			screen_pos := GetWorldToScreen(new_world_pos, camera_3d)
 			color_to_use := PINK
-			color_to_use.r -= u8(rand.float32_range(1, 7)*4)
-			color_to_use.g += u8(rand.float32_range(1, 9)*7)
-			color_to_use.b -= u8(rand.float32_range(1, 3)*3)
+			color_to_use.r -= u8(rand.float32_range(1, 7) * 4)
+			color_to_use.g += u8(rand.float32_range(1, 9) * 7)
+			color_to_use.b -= u8(rand.float32_range(1, 3) * 3)
 			color_to_use.a = u8(rand.float32_range(100, 200))
-			DrawCircleV(
-				screen_pos,
-				10,
-				color_to_use,
-			)
+			DrawCircleV(screen_pos, 10, color_to_use)
 		}
 		// DrawSphere(pos, radius, RED)
 	}
@@ -570,6 +583,7 @@ get_path :: proc(
 			continue
 		}
 		get_score :: proc(point: ray.Vector3) -> int {
+			rand.reset(u64(game_clock))
 			score := 0
 			if point == {0, 1, 0} {
 				score -= 1000
@@ -650,6 +664,7 @@ main :: proc() {
 		delete(x)
 	}
 	delete(level_to_goal_positions)
+	delete(pos_to_remaining_needed)
 	shutdown()
 	free_all()
 	reset_tracking_allocator(&tracking_allocator)
